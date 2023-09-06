@@ -13,24 +13,41 @@ from zipfile import ZipFile
 
 
 def captura_conta_dados():
-    CAMINHO_ARQUIVO = Path(__file__).parent
-    arquivo = '2023.zip'
+    CAMINHO_RAIZ = Path(__file__).parent
 
-    # caminho = CAMINHO_ARQUIVO / 'tmp' / arquivo
-    caminho = CAMINHO_ARQUIVO / 'tmp' / arquivo
+    currentDateTime = datetime.now()
+    date = currentDateTime.date()
+    ano = date.strftime("%Y")
+
+    arquivo = str(ano)+'.zip'
+    # print('CAMINHO_RAIZ----------------->')
+    # print(CAMINHO_RAIZ)
+    caminho = CAMINHO_RAIZ / 'tmp' / arquivo
+    # caminho = 'tmp/' + ano
+    caminho2 = CAMINHO_RAIZ / 'tmp' / ano
+
     # caminho.touch #criar
     # caminho.unlink  # apagar
-    # caminho.mkdir(exist_ok=True)
-
-    print(CAMINHO_ARQUIVO)
+    caminho2.mkdir(exist_ok=True)
+    # caminho = r'\\airflow-docker\\dags\\tmp\\2023.zip'
+    caminho3 = CAMINHO_RAIZ / 'tmp' / arquivo
+    # caminho3 = '/airflow-docker/dags/tmp/2023/2023.zip'
+    # caminho3 = '/airflow-docker/dags/tmp/2023.zip'
     print(caminho)
+    print(caminho3)
 
     url = 'https://web3.antaq.gov.br/ea/txt/2023.zip'
     response = requests.get(url)
-    print(response)
     if response.status_code == 200:
-        with open('/tmp/2023.zip', 'wb') as f:
+
+        # shutil.rmtree(caminho, ignore_errors=True)
+        with open(caminho, 'wb') as f:
             f.write(response.content)
+            # Path.unlink(caminho, missing_ok=True)
+        with ZipFile(caminho3, 'r') as zip:
+            zip.extractall()
+        # shutil.rmtree(caminho, ignore_errors=True)
+
         print("Download do arquivo ZIP concluído com sucesso.")
         resultado = 'Download do arquivo ZIP concluído com sucesso.'
         qtd = 1
@@ -38,15 +55,17 @@ def captura_conta_dados():
         print("Erro ao fazer o download do arquivo ZIP.")
         resultado = 'Erro ao fazer o download do arquivo ZIP.'
         qtd = 0
-
     return qtd
 
 
 def email_carga(ti):
     qtd = ti.xcom_pull(task_ids='captura_conta_dados')
+    # qtd = 1
     print('ipoipoipoipoipoipoipoipoipoipoipoipoipoipoipoipoiop')
     print(qtd)
+
     if (qtd == 1):
+
         return 'carga_delta'
     return 'nvalido'
 
@@ -66,7 +85,7 @@ def email_concluido(ti):
 
 
 with DAG('antaq_dag', start_date=datetime(2023, 9, 1),
-         schedule_interval='@daily', catchup=False
+         schedule='@daily', catchup=False
          ) as dag:
 
     captura_conta_dados = PythonOperator(
