@@ -3,13 +3,13 @@ from datetime import datetime
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.bash import BashOperator
 from airflow.providers.http.sensors.http import HttpSensor
-# import pandas as pd
 import requests
 import zipfile
 import os
 import shutil
 from pathlib import Path
 from zipfile import ZipFile
+from airflow.utils.email import send_email
 
 
 def captura_conta_dados():
@@ -65,9 +65,21 @@ def email_carga(ti):
     print(qtd)
 
     if (qtd == 1):
+        msg_ = 'Download do arquivo ZIP feito com Sucesso'
+        msg_ret = 'carga_delta'
+    else:
+        msg_ = 'Download do arquivo ZIP feito com falhas'
+        msg_ret = 'nvalido'
 
-        return 'carga_delta'
-    return 'nvalido'
+    send_email(
+        to='fbianastacio@gmail.com',
+        subject=msg_,
+        html_content="""
+        <h1>Este é o corpo do email</h1>
+        """
+    )
+
+    return msg_ret
 
 
 def carga_delta(ti):
