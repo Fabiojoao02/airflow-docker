@@ -1,8 +1,12 @@
 from airflow import DAG
-from datetime import datetime
+from datetime import datetime, timedelta
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.bash import BashOperator
+from airflow.operators.email import EmailOperator
 from airflow.providers.http.sensors.http import HttpSensor
+from airflow.sensors.filesystem import FileSensor
+from airflow.utils.task_group import TaskGroup
+from airflow.models import Variable
 import requests
 import zipfile
 import os
@@ -12,44 +16,50 @@ from zipfile import ZipFile
 from airflow.utils.email import send_email
 
 
+CAMINHO_RAIZ = Path(__file__).parent.parent
+currentDateTime = datetime.now()
+date = currentDateTime.date()
+ano = date.strftime("%Y")
+
+arquivo = str(ano)+'.zip'
+caminho = CAMINHO_RAIZ / 'data' / arquivo
+
+expurgos = CAMINHO_RAIZ / 'expurgos' / arquivo
+
+default_args = {
+    'depends_on_past': False,
+    'email': ['fbianastacio@gmail.com'],
+    'email_on_failure': False,  # True
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(seconds=10)
+}
+
+
 def captura_conta_dados():
-    CAMINHO_RAIZ = Path(__file__).parent
-
-    currentDateTime = datetime.now()
-    date = currentDateTime.date()
-    ano = date.strftime("%Y")
-
-    arquivo = str(ano)+'.zip'
-    # print('CAMINHO_RAIZ----------------->')
-    # print(CAMINHO_RAIZ)
-    caminho = CAMINHO_RAIZ / 'tmp' / arquivo
-    # caminho = 'tmp/' + ano
-    caminho2 = CAMINHO_RAIZ / 'tmp' / ano
-
-    # caminho.touch #criar
-    # caminho.unlink  # apagar
-    caminho2.mkdir(exist_ok=True)
-    # caminho = r'\\airflow-docker\\dags\\tmp\\2023.zip'
-    caminho3 = CAMINHO_RAIZ / 'tmp' / arquivo
-    # caminho3 = '/airflow-docker/dags/tmp/2023/2023.zip'
-    # caminho3 = '/airflow-docker/dags/tmp/2023.zip'
-    print(caminho)
-    print(caminho3)
 
     url = 'https://web3.antaq.gov.br/ea/txt/2023.zip'
+    # caminho = r'g:\airflow-docker\dags\data\2023.zip'
     response = requests.get(url)
     if response.status_code == 200:
 
         # shutil.rmtree(caminho, ignore_errors=True)
         with open(caminho, 'wb') as f:
             f.write(response.content)
-            # Path.unlink(caminho, missing_ok=True)
-        with ZipFile(caminho3, 'r') as zip:
-            zip.extractall()
-        # shutil.rmtree(caminho, ignore_errors=True)
 
-        print("Download do arquivo ZIP concluído com sucesso.")
-        resultado = 'Download do arquivo ZIP concluído com sucesso.'
+        try:
+            # Path.unlink(caminho, missing_ok=True)
+            with ZipFile(caminho, 'r') as zip:
+                zip.extractall()
+            print(f"Arquivo ZIP descompactado com sucesso.{caminho}")
+        except Exception as e:
+            print(f"Erro ao descompactar o arquivo ZIP: {e}")
+
+        # move arquivos para expurgos
+        # shutil.move(caminho, expurgos)
+
+        print(f'Download do arquivo ZIP concluído com sucesso.{caminho}')
+        resultado = f'Download do arquivo ZIP concluído com sucesso.{caminho}'
         qtd = 1
     else:
         print("Erro ao fazer o download do arquivo ZIP.")
@@ -58,68 +68,64 @@ def captura_conta_dados():
     return qtd
 
 
-def email_carga(ti):
-    qtd = ti.xcom_pull(task_ids='captura_conta_dados')
-    # qtd = 1
-    print('ipoipoipoipoipoipoipoipoipoipoipoipoipoipoipoipoiop')
-    print(qtd)
+# schedule_interval="*/3 * * * * "
+dag = DAG('antaq_dag', description='Dados da ANTAQ',
+          schedule_interval=None, start_date=datetime(2023, 9, 10),
+          catchup=False, default_args=default_args, default_view='graph',
+          doc_md="## Dag pegar os dados da ANTAQ no site antaq.gov")
 
-    if (qtd == 1):
-        msg_ = 'Download do arquivo ZIP feito com Sucesso'
-        msg_ret = 'carga_delta'
+group_check_temp = TaskGroup("group_check_temp", dag=dag)
+# group_database = TaskGroup('group_database', dag=dag)
+
+file_sensor_task = FileSensor(
+    task_id='file_sensor_task',
+    filepath=Variable.get('path_file'),
+    fs_conn_id='fs_default',
+    poke_interval=10,
+    dag=dag)
+
+captura_conta_dados = PythonOperator(
+    task_id='captura_conta_dados',
+    python_callable=captura_conta_dados
+)
+
+send_email_alert = EmailOperator(
+    task_id='send_email_alert',
+    to='fbianastacio@gmail.com',
+    subject='Airlfow alert',
+    html_content='''<h3>Erro ao fazer o download do arquivo ZIP. </h3>
+                                <p> Dag: antaq_dag </p>
+                                ''',
+    task_group=group_check_temp,
+    dag=dag)
+
+send_email_normal = EmailOperator(
+    task_id='send_email_normal',
+    to='fbianastacio@gmail.com',
+    subject='Airlfow advise',
+    html_content='''<h3>Download do arquivo ZIP concluído com sucesso. </h3>
+                                <p> Dag: antaq_dag </p>
+                                ''',
+    task_group=group_check_temp,
+    dag=dag)
+
+
+def avalia_temp(ti):
+    number = ti.xcom_pull(task_ids='captura_conta_dados', key="qde")
+    if number == 0:
+        return 'group_check_temp.send_email_alert'
     else:
-        msg_ = 'Download do arquivo ZIP feito com falhas'
-        msg_ret = 'nvalido'
-
-    send_email(
-        to='fbianastacio@gmail.com',
-        subject=msg_,
-        html_content="""
-        <h1>Este é o corpo do email</h1>
-        """
-    )
-
-    return msg_ret
+        return 'group_check_temp.send_email_normal'
 
 
-def carga_delta(ti):
-    qtd = ti.xcom_pull(task_ids='email_carga')
-    if (qtd == 1):
-        return 'carga_delta'
-    return 'nvalido'
+check_temp_branc = BranchPythonOperator(
+    task_id='check_temp_branc',
+    python_callable=avalia_temp,
+    provide_context=True,
+    dag=dag,
+    task_group=group_check_temp)
 
+with group_check_temp:
+    check_temp_branc >> [send_email_alert, send_email_normal]
 
-def email_concluido(ti):
-    qtd = ti.xcom_pull(task_ids='carga_delta')
-    if (qtd == 1):
-        return 'email_concluido'
-    return 'nvalido'
-
-
-with DAG('antaq_dag', start_date=datetime(2023, 9, 1),
-         schedule='@daily', catchup=False
-         ) as dag:
-
-    captura_conta_dados = PythonOperator(
-        task_id='captura_conta_dados',
-        python_callable=captura_conta_dados
-
-    )
-
-    email_carga = BranchPythonOperator(
-        task_id='email_carga',
-        python_callable=email_carga
-    )
-
-    carga_delta = PythonOperator(
-        task_id='carga_delta',
-        python_callable=carga_delta
-    )
-
-    email_concluido = BashOperator(
-        task_id='email_concluido',
-        bash_command="echo 'Quantidade não OK'"
-    )
-
-
-captura_conta_dados >> email_carga >> carga_delta >> email_concluido
+captura_conta_dados >> file_sensor_task >> group_check_temp
